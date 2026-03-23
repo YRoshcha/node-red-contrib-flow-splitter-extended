@@ -1,6 +1,6 @@
 {
   "name": "@vdwpsmt/node-red-contrib-flow-splitter-extended",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Split your flows.json file in individual YAML or JSON files (per tab, subflow and config-node) with optional function and ui-template node code extraction.",
   "main": "index.js",
   "keywords": [

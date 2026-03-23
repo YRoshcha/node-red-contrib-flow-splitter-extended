@@ -130,7 +130,8 @@ Default configuration file =
   "destinationFolder": "src",
   "tabsOrder": [],
   "extractFunctionsTemplates": true,
-  "restoreFunctionsTemplates": false
+  "restoreFunctionsTemplates": false,
+  "enableArtifact": false
 }
 ```
 
@@ -140,6 +141,7 @@ You can freely edit the config file, the changes are taken into account at the n
 - `destinationFolder`: path where to create the `tabs`, `subflows` and `config-nodes` sub-directories
 - `tabsOrder`: position of each tab (ordered array of the Ids of each tab node)
 - `extractFunctionsTemplates`: additional extraction of function and ui-template nodes
+- `enableArtifact`: when `true`, writes a deployable monolith artifact to `artifact/flows.json` on reload/start events
 ## Installation
 
 ```bash

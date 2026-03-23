@@ -25,13 +25,16 @@ const functionsTemplatesHandler = require('./functions-templates-handler')
 let RED
 
 const splitCfgFilename = '.config.flow-splitter.json'
+const artifactsDirname = 'artifact'
+const artifactsFilename = 'flows.json'
 const DEFAULT_CFG = {
     fileFormat: 'yaml',
     destinationFolder: 'src',
     tabsOrder: [],
     monolithFilename: "flows.json",
     extractFunctionsTemplates: true,
-    restoreFunctionsTemplates: false
+    restoreFunctionsTemplates: false,
+    enableArtifact: false
 }
 
 /**
@@ -359,6 +362,42 @@ function restoreIntoFlowDirectory(dir, fileFormat, flowType) {
 }
 
 /**
+ * Write a monolith artifact file to artifact/flows.json when enabled.
+ * @param {object} cfg - Splitter configuration
+ * @param {string} projectPath - Path to the project
+ * @param {Array} [flowNodes] - Optional flow nodes to serialize directly
+ */
+function writeMonolithArtifact(cfg, projectPath, flowNodes) {
+    if (cfg.enableArtifact !== true) {
+        return
+    }
+
+    const artifactDir = path.join(projectPath, artifactsDirname)
+    const artifactPath = path.join(artifactDir, artifactsFilename)
+
+    try {
+        fs.mkdirSync(artifactDir, { recursive: true })
+
+        if (Array.isArray(flowNodes)) {
+            fs.writeFileSync(artifactPath, eol.auto(JSON.stringify(flowNodes, null, 2)), 'utf8')
+        } else {
+            const monolithPath = path.join(projectPath, cfg.monolithFilename || RED.settings.flowFile || 'flows.json')
+
+            if (!fs.existsSync(monolithPath)) {
+                RED.log.warn(`[node-red-contrib-flow-splitter-extended] Could not write artifact: monolith file not found at '${monolithPath}'`)
+                return
+            }
+
+            fs.copyFileSync(monolithPath, artifactPath)
+        }
+
+        RED.log.info(`[node-red-contrib-flow-splitter-extended] Wrote monolith artifact at '${artifactPath}'`)
+    } catch (error) {
+        RED.log.warn(`[node-red-contrib-flow-splitter-extended] Could not write monolith artifact: ${error.message}`)
+    }
+}
+
+/**
  * Manual reload endpoint handler
  * Restores functions/templates from files and reloads flows
  */
@@ -382,6 +421,7 @@ async function manualReload(req, res) {
         }
 
         manager.constructMonolithFileFromFlowSet(flowSet, cfg, projectPath, false)
+        writeMonolithArtifact(cfg, projectPath)
 
         const PRIVATE_RED = getPrivateRED()
         await PRIVATE_RED.nodes.loadFlows(true)
@@ -428,6 +468,7 @@ async function onFlowReload(flowEventData) {
 
         const updatedCfg = manager.constructMonolithFileFromFlowSet(flowSet, cfg, projectPath, false)
         writeSplitterConfig(updatedCfg, projectPath)
+        writeMonolithArtifact(updatedCfg, projectPath)
 
         const PRIVATE_RED = getPrivateRED()
 
@@ -447,6 +488,7 @@ async function onFlowReload(flowEventData) {
 
     const updatedCfg = manager.constructTreeFilesFromFlowSet(flowSet, cfg, projectPath)
     writeSplitterConfig(updatedCfg, projectPath)
+    writeMonolithArtifact(updatedCfg, projectPath, flowEventData.config.flows)
 
     extractFunctionsTemplatesFromSplitFiles(updatedCfg, projectPath)
 

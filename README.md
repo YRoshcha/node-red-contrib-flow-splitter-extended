@@ -253,7 +253,9 @@ src/tabs/Dashboard/Header_Widget.info.md
 
 ## Credits
 
-This extended version combines the flow-splitting functionality from the original [node-red-contrib-flow-splitter](https://github.com/vgo-exo/node-red-contrib-flow-splitter) with function/template extraction inspired by [functions-templates-manager](https://github.com/daniel-payne/functions-templates-manager).
+Maintained by [YRoshcha](https://github.com/YRoshcha).
+
+This extended version combines the flow-splitting functionality from the original [node-red-contrib-flow-splitter](https://github.com/vgo-exo/node-red-contrib-flow-splitter) with function/template extraction inspired by [functions-templates-manager](https://github.com/daniel-payne/functions-templates-manager). It was originally packaged as `node-red-contrib-flow-splitter-extended` by vdwpsmt.
 
 ## License
 

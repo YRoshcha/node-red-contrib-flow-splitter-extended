@@ -36,6 +36,31 @@ function transliterate(text) {
 }
 
 /**
+ * Maps a core `template` node's `format` field (its editor syntax-highlighting
+ * mode) to a sensible file extension for the extracted file. Falls back to
+ * `.txt` for formats not in this list (e.g. 'plain', or anything unexpected).
+ */
+const TEMPLATE_FORMAT_EXTENSIONS = {
+    html: 'html',
+    xml: 'xml',
+    json: 'json',
+    javascript: 'js',
+    css: 'css',
+    sql: 'sql',
+    yaml: 'yaml',
+    markdown: 'md',
+    handlebars: 'hbs'
+}
+
+/**
+ * @param {string} [format]
+ * @returns {string} file extension without the leading dot
+ */
+function templateFileExtension(format) {
+    return TEMPLATE_FORMAT_EXTENSIONS[format] || 'txt'
+}
+
+/**
  * Functions and Templates nodes Handler
  * Extracts function and ui-template node code into separate files
  * and restores them back when rebuilding flows
@@ -72,6 +97,12 @@ function extractFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
             name = node.name || 'unnamed-function'
         } else if (type === 'ui-template') {
             name = node.name || 'unnamed-template'
+        } else if (type === 'template') {
+            // Core Node-RED "template" node (mustache/plain templating).
+            // Its content lives in `node.template`, not `node.format` -
+            // `node.format` here is only the editor's syntax-highlighting
+            // mode (e.g. "html", "json"), never actual code/content.
+            name = node.name || 'unnamed-template-node'
         } else {
             return
         }
@@ -87,17 +118,28 @@ function extractFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
             fileName = sanitizedName
         }
 
-        // Detect if it's a Vue template or a function
-        const hasTemplate = node.format?.trim().indexOf('<template>') !== -1 ?? false
-        const hasScript = node.format?.trim().indexOf('<script>') !== -1 ?? false
-        const isVue = (typeof node.format === 'string' && (hasTemplate || hasScript))
+        // Detect the node kind so we read/write the right field:
+        // - ui-template (Dashboard 2.0): code lives in `format`
+        // - core template node: content lives in `template`
+        // - function: code lives in `func` (+ optional initialize/finalize)
+        const hasTemplateTag = node.format?.trim().indexOf('<template>') !== -1 ?? false
+        const hasScriptTag = node.format?.trim().indexOf('<script>') !== -1 ?? false
+        const isVue = type === 'ui-template' && typeof node.format === 'string' && (hasTemplateTag || hasScriptTag)
+        const isTemplateNode = type === 'template'
         const isFun = (
             (typeof node.func === 'string' && node.func.trim().length > 0) ||
             (typeof node.initialize === 'string' && node.initialize.trim().length > 0) ||
             (typeof node.finalize === 'string' && node.finalize.trim().length > 0)
-        ) && isVue === false
+        ) && isVue === false && isTemplateNode === false
 
-        let code = isVue ? node.format : node.func
+        let code
+        if (isVue) {
+            code = node.format
+        } else if (isTemplateNode) {
+            code = node.template
+        } else {
+            code = node.func
+        }
         let initialize = isFun ? node.initialize : undefined
         let finalize = isFun ? node.finalize : undefined
         let info = node.info ?? undefined
@@ -108,7 +150,7 @@ function extractFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
         if ((finalize ?? '').trim().length === 0) finalize = undefined
         if ((info ?? '').trim().length === 0) info = undefined
 
-        if (isVue || isFun) {
+        if (isVue || isFun || isTemplateNode) {
             // Ensure output directory exists
             if (!fs.existsSync(extractedDir)) {
                 fs.mkdirSync(extractedDir, { recursive: true })
@@ -117,7 +159,8 @@ function extractFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
             count++
 
             const baseName = fileName
-            const codeName = `${baseName}.${isVue ? 'vue' : 'js'}`
+            const codeExt = isVue ? 'vue' : (isTemplateNode ? templateFileExtension(node.format) : 'js')
+            const codeName = `${baseName}.${codeExt}`
             const initializeName = `${baseName}.initialize.js`
             const finalizeName = `${baseName}.finalize.js`
             const infoName = `${baseName}.info.md`
@@ -149,6 +192,8 @@ function extractFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
                 fileName,
                 isVue,
                 isFun,
+                isTemplateNode,
+                codeExt,
                 hasCode: code != null,
                 hasInitialize: initialize != null,
                 hasFinalize: finalize != null,
@@ -206,7 +251,10 @@ function restoreFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
         }
 
         const baseName = item.fileName
-        const codeName = `${baseName}.${item.isVue ? 'vue' : 'js'}`
+        // item.codeExt may be absent in manifests written before this fix;
+        // fall back to the old vue/js guess so existing manifests still work.
+        const codeExt = item.codeExt || (item.isVue ? 'vue' : 'js')
+        const codeName = `${baseName}.${codeExt}`
         const initializeName = `${baseName}.initialize.js`
         const finalizeName = `${baseName}.finalize.js`
         const infoName = `${baseName}.info.md`
@@ -222,7 +270,11 @@ function restoreFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
             if (item.isVue) {
                 if (node.format !== content) {
                     node.format = content
-                    node.func = content
+                    updatedCount++
+                }
+            } else if (item.isTemplateNode) {
+                if (node.template !== content) {
+                    node.template = content
                     updatedCount++
                 }
             } else if (item.isFun) {

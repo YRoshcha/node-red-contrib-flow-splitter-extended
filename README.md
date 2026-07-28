@@ -23,9 +23,10 @@ It will make the diffs of your version control much more controlled and readable
 - Maintains tab order through configuration
 
 ### Optional Function & Template Extraction and Restore (NEW)
-- Automatically extracts into seperate files per function/ui-template
+- Automatically extracts into seperate files per function/ui-template/template
   - Extracts code from `function` nodes into `.js` files
   - Extracts `ui-template` (Dashboard 2.0) content into `.vue` files
+  - Extracts core `template` node content (mustache/plain templating) into a file matching its format - `.html`, `.json`, `.xml`, `.yaml`, `.md`, `.hbs`, `.sql`, `.css`, `.js`, or `.txt` as a fallback
   - Supports function `initialize` and `finalize` code in separate files
   - Extracts node `info` documentation into `.md` files
 - Organizes extracted files in subdirectories alongside their parent tab/subflow
@@ -216,6 +217,30 @@ Dashboard 2.0 ui-template nodes are extracted to `.vue` files:
 src/tabs/Dashboard/Header_Widget.vue
 src/tabs/Dashboard/Header_Widget.info.md
 ```
+
+### Core Template Nodes
+
+Node-RED's built-in `template` node (mustache/plain templating - commonly used to build HTML, emails, or any other text output) is extracted to a file matching its `format` field:
+
+| `format` on the node | Extracted extension |
+|---|---|
+| `html` | `.html` |
+| `json` | `.json` |
+| `xml` | `.xml` |
+| `yaml` | `.yaml` |
+| `markdown` | `.md` |
+| `handlebars` | `.hbs` |
+| `sql` | `.sql` |
+| `css` | `.css` |
+| `javascript` | `.js` |
+| anything else (e.g. `plain`) | `.txt` |
+
+**Example:** A `template` node named "driver Bonus 04-03" with `format: "html"` creates:
+```
+src/tabs/MyTab/driver_Bonus_04-03.html
+```
+
+Editing that `.html` file and reloading writes the content straight back into the node's `template` field - the `format` field itself is left untouched, since it only controls the editor's syntax-highlighting mode, not the content.
 
 ## Benefits for Development
 

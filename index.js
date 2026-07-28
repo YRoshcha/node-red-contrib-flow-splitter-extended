@@ -59,6 +59,15 @@ function writeSplitterConfig(cfg, projectPath) {
  */
 function getProjectPath() {
     const userDir = RED.settings.userDir
+    if (!userDir) {
+        // RED.settings.userDir can be undefined if this handler runs on a
+        // 'flows:started' event fired very early during Node-RED startup,
+        // before runtime settings are fully resolved. Returning null here
+        // lets the caller skip processing gracefully instead of crashing
+        // with "TypeError [ERR_INVALID_ARG_TYPE]: The 'path' argument must
+        // be of type string. Received undefined".
+        return null
+    }
     const projectsConfigFile = path.join(userDir, '.config.projects.json')
 
     if (fs.existsSync(projectsConfigFile)) {
@@ -479,6 +488,10 @@ async function onFlowReload(flowEventData) {
     RED.log.info("[node-red-contrib-flow-splitter-extended] Flow restart event")
 
     const projectPath = getProjectPath()
+    if (!projectPath) {
+        RED.log.warn("[node-red-contrib-flow-splitter-extended] RED.settings.userDir is not available yet, skipping flow-splitter processing for this event")
+        return
+    }
     const cfg = loadSplitterConfig(projectPath)
 
     if (flowEventData.config.flows.length === 0) {

@@ -63,6 +63,16 @@ When Node-RED starts with no flows.json:
 
 This allows you to edit function and template code in your favorite IDE with full syntax highlighting, linting, code assist and version control benefits!
 
+### Backward Compatibility & Safety
+
+This fork intentionally **keeps the monolith flow file (`flows.json` by default) on disk** after every split, instead of deleting it. Node-RED's own deploy/storage layer already writes a fully current copy of it on every deploy - this plugin just leaves that copy in place rather than erasing it.
+
+This means:
+- If this plugin is ever removed (`npm uninstall`, or simply not carried into a new image/build), plain Node-RED keeps booting normally from the last known-good `flows.json`. No data loss, no code changes required, no empty flows.
+- `src/` remains the source you actually edit and diff in git (still add the monolith flow file to `.gitignore` for that reason - see the note at the top), but it's no longer a *single point of failure* for booting Node-RED at all.
+
+On top of that, when `enableArtifact` is `true` (the default), every reload also writes a backup copy to `artifact/flows.json`. If a rebuild from `src/` ever fails (for example due to a corrupted or malformed split file), the plugin automatically restores the last good `artifact/flows.json` instead of leaving Node-RED with zero flows. This fallback only kicks in for the "no flow file present, rebuilding from source" case, and only if at least one successful reload has run before to create the backup.
+
 ### Manual Reload (Live Editing)
 
 When Node-RED is running and you edit function/template files externally, use the **manual reload** endpoint to apply changes without restarting:
@@ -95,7 +105,9 @@ This allows you to:
 
 ```
 project/
-├── flows.json (auto-deleted after split)
+├── flows.json (kept in sync, safe fallback if this plugin is ever removed)
+├── artifact/
+│   └── flows.json (backup copy, written when enableArtifact is true)
 ├── .config.flow-splitter.json
 └── src/
     ├── tabs/
@@ -131,7 +143,7 @@ Default configuration file =
   "tabsOrder": [],
   "extractFunctionsTemplates": true,
   "restoreFunctionsTemplates": false,
-  "enableArtifact": false
+  "enableArtifact": true
 }
 ```
 
@@ -141,11 +153,11 @@ You can freely edit the config file, the changes are taken into account at the n
 - `destinationFolder`: path where to create the `tabs`, `subflows` and `config-nodes` sub-directories
 - `tabsOrder`: position of each tab (ordered array of the Ids of each tab node)
 - `extractFunctionsTemplates`: additional extraction of function and ui-template nodes
-- `enableArtifact`: when `true`, writes a deployable monolith artifact to `artifact/flows.json` on reload/start events
+- `enableArtifact`: **default `true`.** Writes a backup monolith flow file to `artifact/flows.json` on every reload/start event, and is used to automatically restore flows if a rebuild from `src/` ever fails (see [Backward Compatibility & Safety](#backward-compatibility--safety)). Set to `false` only if you don't want this backup written at all.
 ## Installation
 
 ```bash
-npm install node-red-contrib-flow-splitter-extended
+npm install @yroshcha/node-red-contrib-flow-splitter-extended
 ```
 
 Or install via the Node-RED palette manager.
@@ -240,9 +252,11 @@ src/tabs/Dashboard/Header_Widget.info.md
 
 ### Split Files Not Rebuilding
 
-1. **Check flows.json:** Ensure flows.json doesn't exist (it should be deleted after split)
+The "rebuild from `src/`" path only runs when Node-RED boots with no flow file present at all (a genuinely fresh environment - new PVC, fresh git clone, etc.), since this fork no longer deletes the monolith flow file after a split.
+
+1. **Check flows.json:** If you expected a rebuild and it didn't happen, confirm the monolith flow file genuinely doesn't exist on disk yet - if it's present (even from a previous run), Node-RED just boots from it directly and the split-side logic keeps `src/` in sync on the next deploy instead.
 2. **Verify file format:** Ensure split files match the configured format (YAML/JSON)
-3. **Restart Node-RED:** A full restart rebuilds flows.json from split files
+3. **Check the logs:** Any rebuild failure is logged with the `[node-red-contrib-flow-splitter-extended]` prefix, including whether it fell back to the `artifact/flows.json` backup or not - see [Backward Compatibility & Safety](#backward-compatibility--safety)
 
 ## Compatibility
 
@@ -260,7 +274,3 @@ This extended version combines the flow-splitting functionality from the origina
 ## License
 
 See LICENSE file for details.
-
-
-
-

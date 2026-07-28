@@ -34,7 +34,7 @@ const DEFAULT_CFG = {
     monolithFilename: "flows.json",
     extractFunctionsTemplates: true,
     restoreFunctionsTemplates: false,
-    enableArtifact: false
+    enableArtifact: true
 }
 
 /**
@@ -443,6 +443,33 @@ function writeMonolithArtifact(cfg, projectPath, flowNodes) {
 }
 
 /**
+ * Restore flows.json from the artifact backup after a failed rebuild from
+ * split source files. Only usable when `enableArtifact` is true and a
+ * previous successful reload has left a backup on disk.
+ * @param {object} cfg - Splitter configuration
+ * @param {string} projectPath - Path to the project
+ * @returns {boolean} true if the restore succeeded
+ */
+function restoreFromArtifactFallback(cfg, projectPath) {
+    const artifactPath = path.join(projectPath, artifactsDirname, artifactsFilename)
+
+    if (!fs.existsSync(artifactPath)) {
+        RED.log.error(`[node-red-contrib-flow-splitter-extended] Rebuild from source files failed and no artifact backup exists at '${artifactPath}' - flows will remain empty. Enable 'enableArtifact' and let at least one successful reload run to create a backup.`)
+        return false
+    }
+
+    try {
+        const monolithPath = path.join(projectPath, cfg.monolithFilename || RED.settings.flowFile || 'flows.json')
+        fs.copyFileSync(artifactPath, monolithPath)
+        RED.log.warn(`[node-red-contrib-flow-splitter-extended] Rebuild from source files failed - restored flows from artifact backup '${artifactPath}' instead. Check 'src/' for corrupted split files.`)
+        return true
+    } catch (error) {
+        RED.log.error(`[node-red-contrib-flow-splitter-extended] Rebuild failed AND could not restore from artifact backup: ${error.message}`)
+        return false
+    }
+}
+
+/**
  * Manual reload endpoint handler
  * Restores functions/templates from files and reloads flows
  */
@@ -505,26 +532,50 @@ async function onFlowReload(flowEventData) {
     if (flowEventData.config.flows.length === 0) {
         // The flow file does not exist or is empty - rebuild from split files
         RED.log.info("[node-red-contrib-flow-splitter-extended] Rebuilding single flows.json file from source files")
-        
-        restoreFunctionsTemplatesIntoSplitFiles(cfg, projectPath)
-        
-        const flowSet = manager.constructFlowSetFromTreeFiles(cfg, projectPath)
 
-        if (!flowSet) {
-            RED.log.error("[node-red-contrib-flow-splitter-extended] Cannot build FlowSet from source tree files")
-            return
+        let rebuildFailed = false
+        let updatedCfg = cfg
+
+        try {
+            restoreFunctionsTemplatesIntoSplitFiles(cfg, projectPath)
+
+            const flowSet = manager.constructFlowSetFromTreeFiles(cfg, projectPath)
+
+            if (!flowSet) {
+                RED.log.error("[node-red-contrib-flow-splitter-extended] Cannot build FlowSet from source tree files")
+                rebuildFailed = true
+            } else {
+                updatedCfg = manager.constructMonolithFileFromFlowSet(flowSet, cfg, projectPath, false)
+                writeSplitterConfig(updatedCfg, projectPath)
+                writeMonolithArtifact(updatedCfg, projectPath)
+            }
+        } catch (error) {
+            // Anything from a malformed YAML/JSON split file to a bug in
+            // flows-file-manager itself can throw here. Treat it the same
+            // as an explicit "cannot build" failure: fall back below rather
+            // than letting Node-RED come up with zero flows silently.
+            RED.log.error(`[node-red-contrib-flow-splitter-extended] Rebuild from source files threw an error: ${error.message}`)
+            rebuildFailed = true
         }
 
-        const updatedCfg = manager.constructMonolithFileFromFlowSet(flowSet, cfg, projectPath, false)
-        writeSplitterConfig(updatedCfg, projectPath)
-        writeMonolithArtifact(updatedCfg, projectPath)
+        if (rebuildFailed) {
+            if (cfg.enableArtifact !== true) {
+                RED.log.error("[node-red-contrib-flow-splitter-extended] Rebuild failed and 'enableArtifact' is disabled, so there is no backup to fall back to. Flows will remain empty. Enable 'enableArtifact' in .config.flow-splitter.json to get automatic fallback next time.")
+                return
+            }
+            if (!restoreFromArtifactFallback(cfg, projectPath)) {
+                return
+            }
+        }
 
         const PRIVATE_RED = getPrivateRED()
 
         RED.log.info("[node-red-contrib-flow-splitter-extended] Stopping and loading nodes")
 
         PRIVATE_RED.nodes.loadFlows(true).then(function () {
-            RED.log.info("[node-red-contrib-flow-splitter-extended] Flows are rebuilt and available")
+            RED.log.info(rebuildFailed
+                ? "[node-red-contrib-flow-splitter-extended] Flows loaded from artifact fallback"
+                : "[node-red-contrib-flow-splitter-extended] Flows are rebuilt and available")
         })
         return
     }
@@ -551,13 +602,21 @@ async function onFlowReload(flowEventData) {
 
     extractFunctionsTemplatesFromSplitFiles(updatedCfg, projectPath)
 
-    try {
-        const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
-        await delay(150) // Wait for Node-RED to create the flowFile before erasing it
-        fs.unlinkSync(path.join(projectPath, RED.settings.flowFile))
-    } catch (error) {
-        RED.log.warn(`[node-red-contrib-flow-splitter-extended] Cannot erase file '${RED.settings.flowFile}': ${error.message}`)
-    }
+    // NOTE: earlier versions of this plugin deleted RED.settings.flowFile here
+    // to force the "rebuild from src/" branch above on the next start. That
+    // meant the monolith flows.json only ever existed transiently on disk -
+    // if this plugin were ever removed (npm uninstall, or simply not carried
+    // over into a new image), Node-RED would find no flowFile to boot from
+    // and come up with zero flows, with no plugin left to rebuild it.
+    //
+    // We deliberately do NOT delete it anymore. Node-RED's own deploy/storage
+    // layer already wrote a fully current flowFile to disk as part of this
+    // same deploy - we simply leave it in place. This plugin's split files in
+    // 'src/' remain the source you actually edit and diff in git (still add
+    // the flowFile itself to .gitignore for that reason), but the flowFile on
+    // disk is always a valid, current, plugin-independent fallback: if this
+    // plugin is ever uninstalled, vanilla Node-RED keeps booting normally from
+    // it, with zero data loss and zero code changes required.
 }
 
 /**

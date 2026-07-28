@@ -162,6 +162,34 @@ function cleanupOrphanedDirectories(dir, fileFormat) {
 }
 
 /**
+ * Ensure every tab/subflow/config-node has a non-empty label (tabs) or name
+ * (everything else) before handing the flows off to flows-file-manager.
+ *
+ * Works around a bug in flows-file-manager's disambiguate() function: it
+ * unconditionally reads `subelement.config.site.name` as part of its
+ * fallback chain (`config[attribute] || subelement[attribute] || subelement.config.site.name || ...`).
+ * When a node has no label/name AND no config.site property (the normal case
+ * for most nodes), that access throws "Cannot read properties of undefined
+ * (reading 'name')" and crashes the flow reload. Guaranteeing a truthy
+ * label/name here means the first operand of that chain always short-circuits
+ * before the buggy access is ever reached.
+ * @param {Array} flowNodes - Array of all flow nodes from Node-RED
+ * @returns {Array} flowNodes - Same array, mutated in place with guaranteed identifiers
+ */
+function ensureFlowIdentifiers(flowNodes) {
+    flowNodes.forEach(node => {
+        if (node.type === 'tab') {
+            if (!node.label) {
+                node.label = node.name || node.type || node.id
+            }
+        } else if (!node.name) {
+            node.name = node.type || node.id
+        }
+    })
+    return flowNodes
+}
+
+/**
  * Clean up old flow files when a tab or subflow has been renamed.
  * Scans existing files and removes those with IDs that match current flows but have different filenames.
  * @param {Array} flowNodes - Array of all flow nodes from Node-RED
@@ -484,7 +512,17 @@ async function onFlowReload(flowEventData) {
     // First, clean up any old files from renamed tabs/subflows
     cleanupRenamedFlows(flowEventData.config.flows, cfg, projectPath)
 
-    const flowSet = manager.constructFlowSetFromMonolithObject(flowEventData.config.flows)
+    // Guarantee every node has a label/name to avoid a crash inside
+    // flows-file-manager's disambiguate() (see ensureFlowIdentifiers doc above)
+    ensureFlowIdentifiers(flowEventData.config.flows)
+
+    let flowSet
+    try {
+        flowSet = manager.constructFlowSetFromMonolithObject(flowEventData.config.flows)
+    } catch (error) {
+        RED.log.error(`[node-red-contrib-flow-splitter-extended] Failed to build FlowSet from monolith object (flows-file-manager error): ${error.message}`)
+        return
+    }
 
     const updatedCfg = manager.constructTreeFilesFromFlowSet(flowSet, cfg, projectPath)
     writeSplitterConfig(updatedCfg, projectPath)

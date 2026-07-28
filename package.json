@@ -1,6 +1,6 @@
 {
-  "name": "@vdwpsmt/node-red-contrib-flow-splitter-extended",
-  "version": "1.0.3",
+  "name": "@yroshcha/node-red-contrib-flow-splitter-extended",
+  "version": "1.0.4",
   "description": "Split your flows.json file in individual YAML or JSON files (per tab, subflow and config-node) with optional function and ui-template node code extraction.",
   "main": "index.js",
   "keywords": [
@@ -24,10 +24,13 @@
     "template",
     "extract"
   ],
-  "author": "vdwpsmt",
+  "author": "YRoshcha",
+  "contributors": [
+    "vdwpsmt (original author of node-red-contrib-flow-splitter-extended)"
+  ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/vdwpsmt/node-red-contrib-flow-splitter-extended.git"
+    "url": "https://github.com/YRoshcha/node-red-contrib-flow-splitter-extended.git"
   },
   "license": "Apache-2.0",
   "dependencies": {

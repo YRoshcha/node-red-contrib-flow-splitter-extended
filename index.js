@@ -72,7 +72,15 @@ function getProjectPath() {
 
     if (fs.existsSync(projectsConfigFile)) {
         const nrProjectsCfg = JSON.parse(fs.readFileSync(projectsConfigFile))
-        return path.join(userDir, 'projects', nrProjectsCfg.activeProject)
+        // nrProjectsCfg.activeProject can be missing/undefined when project
+        // mode is not actually in use (e.g. an empty or stale
+        // .config.projects.json). Passing undefined to path.join() throws
+        // "TypeError [ERR_INVALID_ARG_TYPE]: The 'path' argument must be of
+        // type string. Received undefined", so fall back to the plain
+        // userDir in that case instead of crashing.
+        if (nrProjectsCfg && nrProjectsCfg.activeProject) {
+            return path.join(userDir, 'projects', nrProjectsCfg.activeProject)
+        }
     }
     return userDir
 }

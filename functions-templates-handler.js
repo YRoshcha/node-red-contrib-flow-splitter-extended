@@ -1,6 +1,40 @@
 const path = require('path')
 const fs = require('fs-extra')
 
+// Map of Cyrillic characters (Ukrainian + Russian) to Latin equivalents.
+// Used to build filesystem/git-safe file names from node names that may
+// contain Cyrillic text (git can fail with "pathspec ... did not match
+// any files" on some setups when non-ASCII file names are involved).
+const CYRILLIC_TO_LATIN = {
+    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'h', 'ґ': 'g', 'д': 'd', 'е': 'e', 'є': 'ie',
+    'ж': 'zh', 'з': 'z', 'и': 'y', 'і': 'i', 'ї': 'yi', 'й': 'i', 'к': 'k', 'л': 'l',
+    'м': 'm', 'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+    'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'shch', 'ь': '',
+    'ю': 'iu', 'я': 'ia', 'ъ': '', 'ы': 'y', 'э': 'e', 'ё': 'e'
+}
+
+/**
+ * Transliterate Cyrillic characters in a string to Latin equivalents and
+ * strip any other non-ASCII characters, so the result is always safe to
+ * use as a file name (including for git operations).
+ * @param {string} text
+ * @returns {string}
+ */
+function transliterate(text) {
+    return text
+        .split('')
+        .map((char) => {
+            const lower = char.toLowerCase()
+            const mapped = CYRILLIC_TO_LATIN[lower]
+            if (mapped === undefined) {
+                return char
+            }
+            return char === lower ? mapped : mapped.charAt(0).toUpperCase() + mapped.slice(1)
+        })
+        .join('')
+        .replace(/[^\x00-\x7F]/g, '')
+}
+
 /**
  * Functions and Templates nodes Handler
  * Extracts function and ui-template node code into separate files
@@ -42,7 +76,7 @@ function extractFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
             return
         }
 
-        const sanitizedName = name.replace(/[\/\\:*?"<>|]/g, '-')
+        const sanitizedName = transliterate(name).replace(/[\/\\:*?"<>|]/g, '-').replace(/\s+/g, '_')
         fileNames.push(sanitizedName)
         const nameCount = fileNames.filter((n) => n === sanitizedName).length
 

@@ -77,15 +77,35 @@ function extractFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
     if (!flowNodes || flowNodes.length === 0) return
 
     const extractedDir = path.join(flowDir, flowName)
-    
-    // Delete entire extracted directory to ensure fresh state
-    if (fs.existsSync(extractedDir)) {
-        fs.removeSync(extractedDir)
+
+    // Do not remove the whole directory on every deploy. On a large flow this
+    // turns one deploy into thousands of unnecessary unlink/write operations.
+    // The manifest is also used to remove only files that became orphaned.
+    let previousManifest = {}
+    const manifestPath = path.join(extractedDir, '.manifest.json')
+    if (fs.existsSync(manifestPath)) {
+        try {
+            previousManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+        } catch (_) {
+            previousManifest = {}
+        }
     }
-    
+
     const manifest = {}
-    const fileNames = []
+    const fileNameCounts = new Map()
+    const filesToKeep = new Set(['.manifest.json'])
     let count = 0
+
+    const writeIfChanged = (filePath, content) => {
+        if (fs.existsSync(filePath)) {
+            try {
+                if (fs.readFileSync(filePath, 'utf8') === content) return
+            } catch (_) {
+                // Rewrite unreadable or otherwise invalid files below.
+            }
+        }
+        fs.writeFileSync(filePath, content, 'utf8')
+    }
 
     flowNodes.forEach((node) => {
         const id = node.id
@@ -108,8 +128,8 @@ function extractFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
         }
 
         const sanitizedName = transliterate(name).replace(/[\/\\:*?"<>|]/g, '-').replace(/\s+/g, '_')
-        fileNames.push(sanitizedName)
-        const nameCount = fileNames.filter((n) => n === sanitizedName).length
+        const nameCount = (fileNameCounts.get(sanitizedName) || 0) + 1
+        fileNameCounts.set(sanitizedName, nameCount)
 
         let fileName
         if (nameCount > 1) {
@@ -170,19 +190,16 @@ function extractFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
             const finalizeFile = path.join(extractedDir, finalizeName)
             const infoFile = path.join(extractedDir, infoName)
 
-            // Write files
-            if (code != null) {
-                fs.writeFileSync(codeFile, code, 'utf8')
-            }
-            if (initialize != null) {
-                fs.writeFileSync(initializeFile, initialize, 'utf8')
-            }
-            if (finalize != null) {
-                fs.writeFileSync(finalizeFile, finalize, 'utf8')
-            }
-            if (info != null) {
-                fs.writeFileSync(infoFile, info, 'utf8')
-            }
+            filesToKeep.add(codeName)
+            if (initialize != null) filesToKeep.add(initializeName)
+            if (finalize != null) filesToKeep.add(finalizeName)
+            if (info != null) filesToKeep.add(infoName)
+
+            // Write only changed files.
+            if (code != null) writeIfChanged(codeFile, code)
+            if (initialize != null) writeIfChanged(initializeFile, initialize)
+            if (finalize != null) writeIfChanged(finalizeFile, finalize)
+            if (info != null) writeIfChanged(infoFile, info)
 
             // Store in manifest
             manifest[id] = {
@@ -204,8 +221,21 @@ function extractFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
 
     // Save manifest if we extracted anything
     if (count > 0) {
-        const manifestFile = path.join(extractedDir, '.manifest.json')
-        fs.writeFileSync(manifestFile, JSON.stringify(manifest, null, 2), 'utf8')
+        fs.mkdirSync(extractedDir, { recursive: true })
+        const manifestContent = JSON.stringify(manifest, null, 2)
+        writeIfChanged(manifestPath, manifestContent)
+
+        // Remove only files no longer referenced by the current manifest.
+        // Never recursively delete the flow directory: editors and git keep
+        // useful metadata there, and the old behaviour was very expensive.
+        if (fs.existsSync(extractedDir)) {
+            for (const file of fs.readdirSync(extractedDir)) {
+                if (!filesToKeep.has(file) && !file.startsWith('.')) {
+                    const fullPath = path.join(extractedDir, file)
+                    if (fs.statSync(fullPath).isFile()) fs.unlinkSync(fullPath)
+                }
+            }
+        }
         
         RED.log.info(`[node-red-contrib-flow-splitter] Extracted ${count} functions/templates for "${flowName}"`)
     }

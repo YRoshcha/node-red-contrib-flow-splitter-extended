@@ -3,6 +3,7 @@ const fs = require('fs')
 const manager = require('flows-file-manager')
 const eol = require('eol')
 const yaml = require('js-yaml')
+const crypto = require('crypto')
 const functionsTemplatesHandler = require('./functions-templates-handler')
 
 /**
@@ -23,6 +24,8 @@ const functionsTemplatesHandler = require('./functions-templates-handler')
  * @type {REDType}
  */
 let RED
+let lastExtractionFingerprint = null
+let lastRenameFingerprint = null
 
 const splitCfgFilename = '.config.flow-splitter.json'
 const artifactsDirname = 'artifact'
@@ -34,7 +37,8 @@ const DEFAULT_CFG = {
     monolithFilename: "flows.json",
     extractFunctionsTemplates: true,
     restoreFunctionsTemplates: false,
-    enableArtifact: true
+    enableArtifact: true,
+    fastJsonSplit: true
 }
 
 /**
@@ -141,6 +145,57 @@ function extractFunctionsTemplatesFromSplitFiles(cfg, projectPath) {
 }
 
 /**
+ * Return a stable fingerprint for the fields that are externalized. Changes
+ * to wiring or node metadata do not require rewriting thousands of source
+ * files, while edits to function/template content still invalidate it.
+ */
+function getExtractionFingerprint(flowNodes) {
+    const hash = crypto.createHash('sha1')
+    for (const node of flowNodes) {
+        if (node.type !== 'function' && node.type !== 'ui-template' && node.type !== 'template') continue
+        hash.update(JSON.stringify([
+            node.id, node.type, node.name,
+            node.func, node.initialize, node.finalize,
+            node.info, node.format, node.template
+        ]))
+    }
+    return hash.digest('hex')
+}
+
+/**
+ * flows-file-manager currently writes every generated source file on every
+ * deploy. Generate into a private staging tree and promote only changed
+ * files, so deploys do not churn the project's source tree.
+ */
+function constructTreeFilesIncrementally(flowSet, cfg, projectPath) {
+    const stagingName = `.flow-splitter-stage-${process.pid}-${Date.now()}`
+    const stagingCfg = { ...cfg, destinationFolder: stagingName }
+    const stagingRoot = path.join(projectPath, stagingName)
+    const sourceRoot = path.join(projectPath, cfg.destinationFolder)
+
+    try {
+        const stagedCfg = manager.constructTreeFilesFromFlowSet(flowSet, stagingCfg, projectPath)
+        const updatedCfg = { ...stagedCfg, destinationFolder: cfg.destinationFolder }
+        for (const folder of ['tabs', 'subflows', 'config-nodes']) {
+            const fromDir = path.join(stagingRoot, folder)
+            const toDir = path.join(sourceRoot, folder)
+            if (!fs.existsSync(fromDir)) continue
+            fs.mkdirSync(toDir, { recursive: true })
+            for (const file of fs.readdirSync(fromDir)) {
+                const from = path.join(fromDir, file)
+                const to = path.join(toDir, file)
+                if (!fs.existsSync(to) || fs.readFileSync(from).compare(fs.readFileSync(to)) !== 0) {
+                    fs.copyFileSync(from, to)
+                }
+            }
+        }
+        return updatedCfg
+    } finally {
+        fs.rmSync(stagingRoot, { recursive: true, force: true })
+    }
+}
+
+/**
  * Remove subdirectories that don't have a corresponding flow file
  * @param {string} dir - Directory to clean (tabs or subflows)
  * @param {string} fileFormat - File format (yaml or json)
@@ -204,6 +259,68 @@ function ensureFlowIdentifiers(flowNodes) {
         }
     })
     return flowNodes
+}
+
+function fastNormalizeString(value) {
+    let normalized = String(value || '').replace(/[^a-zA-Z0-9\.]/g, '-').replace(/----/g, '-').replace(/---/g, '-').replace(/--/g, '-').toLowerCase()
+    return normalized.replace(/^-+|-+$/g, '')
+}
+
+function fastJsonTree(flowNodes, cfg, projectPath) {
+    const srcDir = path.join(projectPath, cfg.destinationFolder || 'src')
+    const groups = []
+    const tabs = flowNodes.filter(node => node.type === 'tab')
+    const subflows = flowNodes.filter(node => node.type === 'subflow')
+    const usedNames = new Set()
+
+    const addGroup = (folder, node, contents) => {
+        let fileName = fastNormalizeString(node.label || node.name || node.type || node.id)
+        if (!fileName) fileName = node.id
+        if (usedNames.has(fileName)) fileName = `${fileName}-${node.id}`
+        usedNames.add(fileName)
+        groups.push({ folder, fileName, contents: [node].concat(contents.filter(item => item !== node).sort((a, b) => String(a.id).localeCompare(String(b.id)))) })
+    }
+
+    for (const tab of tabs) addGroup('tabs', tab, flowNodes.filter(node => node.z === tab.id))
+    for (const subflow of subflows) addGroup('subflows', subflow, flowNodes.filter(node => node.z === subflow.id))
+
+    const nestedIds = new Set(tabs.concat(subflows).map(node => node.id))
+    for (const node of flowNodes) {
+        if (!node.z && node.type !== 'tab' && node.type !== 'subflow' && !nestedIds.has(node.id)) {
+            addGroup('config-nodes', node, [])
+        }
+    }
+
+    for (const folder of ['tabs', 'subflows', 'config-nodes']) fs.mkdirSync(path.join(srcDir, folder), { recursive: true })
+    for (const group of groups) {
+        const filePath = path.join(srcDir, group.folder, `${group.fileName}.json`)
+        const content = eol.auto(JSON.stringify(group.contents, null, 2))
+        if (!fs.existsSync(filePath) || fs.readFileSync(filePath, 'utf8') !== content) fs.writeFileSync(filePath, content, 'utf8')
+    }
+    return { ...cfg, tabsOrder: tabs.map(tab => tab.id) }
+}
+
+function extractFunctionsTemplatesFromRawFlow(cfg, projectPath, flowNodes) {
+    if (cfg.extractFunctionsTemplates === false) return
+    const srcDir = path.join(projectPath, cfg.destinationFolder || 'src')
+    const tabs = flowNodes.filter(node => node.type === 'tab')
+    const subflows = flowNodes.filter(node => node.type === 'subflow')
+    const usedNames = new Set()
+    const flowName = node => {
+        let name = fastNormalizeString(node.label || node.name || node.id)
+        if (!name) name = node.id
+        if (usedNames.has(name)) name = `${name}-${node.id}`
+        usedNames.add(name)
+        return name
+    }
+    for (const tab of tabs) {
+        const name = flowName(tab)
+        functionsTemplatesHandler.extractFunctionsAndTemplates([tab].concat(flowNodes.filter(node => node.z === tab.id)), name, path.join(srcDir, 'tabs'), RED)
+    }
+    for (const subflow of subflows) {
+        const name = flowName(subflow)
+        functionsTemplatesHandler.extractFunctionsAndTemplates([subflow].concat(flowNodes.filter(node => node.z === subflow.id)), name, path.join(srcDir, 'subflows'), RED)
+    }
 }
 
 /**
@@ -580,27 +697,50 @@ async function onFlowReload(flowEventData) {
         return
     }
 
-    // Flows exist - split into source files
-    // First, clean up any old files from renamed tabs/subflows
-    cleanupRenamedFlows(flowEventData.config.flows, cfg, projectPath)
+    // Flows exist - split into source files. Renames are rare, so avoid
+    // reparsing every existing tab file on every ordinary deploy.
+    const renameFingerprint = flowEventData.config.flows
+        .filter(node => node.type === 'tab' || node.type === 'subflow')
+        .map(node => `${node.type}:${node.id}:${node.label || node.name || ''}`)
+        .join('|')
+    if (renameFingerprint !== lastRenameFingerprint) {
+        cleanupRenamedFlows(flowEventData.config.flows, cfg, projectPath)
+        lastRenameFingerprint = renameFingerprint
+    }
 
     // Guarantee every node has a label/name to avoid a crash inside
     // flows-file-manager's disambiguate() (see ensureFlowIdentifiers doc above)
     ensureFlowIdentifiers(flowEventData.config.flows)
 
-    let flowSet
-    try {
-        flowSet = manager.constructFlowSetFromMonolithObject(flowEventData.config.flows)
-    } catch (error) {
-        RED.log.error(`[node-red-contrib-flow-splitter-extended] Failed to build FlowSet from monolith object (flows-file-manager error): ${error.message}`)
-        return
+    let updatedCfg
+    if (cfg.fileFormat === 'json' && cfg.fastJsonSplit !== false) {
+        updatedCfg = fastJsonTree(flowEventData.config.flows, cfg, projectPath)
+    } else {
+        let flowSet
+        try {
+            flowSet = manager.constructFlowSetFromMonolithObject(flowEventData.config.flows)
+        } catch (error) {
+            RED.log.error(`[node-red-contrib-flow-splitter-extended] Failed to build FlowSet from monolith object (flows-file-manager error): ${error.message}`)
+            return
+        }
+        updatedCfg = constructTreeFilesIncrementally(flowSet, cfg, projectPath)
     }
-
-    const updatedCfg = manager.constructTreeFilesFromFlowSet(flowSet, cfg, projectPath)
     writeSplitterConfig(updatedCfg, projectPath)
-    writeMonolithArtifact(updatedCfg, projectPath, flowEventData.config.flows)
+    // Node-RED has already persisted the current monolith. Copying it is much
+    // cheaper than JSON.stringify-ing the complete flow again.
+    writeMonolithArtifact(updatedCfg, projectPath)
 
-    extractFunctionsTemplatesFromSplitFiles(updatedCfg, projectPath)
+    const extractionFingerprint = getExtractionFingerprint(flowEventData.config.flows)
+    if (extractionFingerprint !== lastExtractionFingerprint) {
+        if (cfg.fileFormat === 'json' && cfg.fastJsonSplit !== false) {
+            extractFunctionsTemplatesFromRawFlow(updatedCfg, projectPath, flowEventData.config.flows)
+        } else {
+            extractFunctionsTemplatesFromSplitFiles(updatedCfg, projectPath)
+        }
+        lastExtractionFingerprint = extractionFingerprint
+    } else {
+        RED.log.info("[node-red-contrib-flow-splitter-extended] Skipping unchanged function/template extraction")
+    }
 
     // NOTE: earlier versions of this plugin deleted RED.settings.flowFile here
     // to force the "rebuild from src/" branch above on the next start. That

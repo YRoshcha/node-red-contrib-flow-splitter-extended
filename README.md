@@ -144,7 +144,8 @@ Default configuration file =
   "tabsOrder": [],
   "extractFunctionsTemplates": true,
   "restoreFunctionsTemplates": false,
-  "enableArtifact": true
+  "enableArtifact": true,
+  "fastJsonSplit": true
 }
 ```
 
@@ -155,6 +156,7 @@ You can freely edit the config file, the changes are taken into account at the n
 - `tabsOrder`: position of each tab (ordered array of the Ids of each tab node)
 - `extractFunctionsTemplates`: additional extraction of function and ui-template nodes
 - `enableArtifact`: **default `true`.** Writes a backup monolith flow file to `artifact/flows.json` on every reload/start event, and is used to automatically restore flows if a rebuild from `src/` ever fails (see [Backward Compatibility & Safety](#backward-compatibility--safety)). Set to `false` only if you don't want this backup written at all.
+- `fastJsonSplit`: **default `true`.** Uses an in-memory JSON splitter that avoids rebuilding a full `FlowSet` and rereading every generated file. Set to `false` to use the legacy `flows-file-manager` path.
 ## Installation
 
 ```bash

@@ -31,7 +31,7 @@ const splitCfgFilename = '.config.flow-splitter.json'
 const artifactsDirname = 'artifact'
 const artifactsFilename = 'flows.json'
 const DEFAULT_CFG = {
-    fileFormat: 'yaml',
+    fileFormat: 'json',
     destinationFolder: 'src',
     tabsOrder: [],
     monolithFilename: "flows.json",

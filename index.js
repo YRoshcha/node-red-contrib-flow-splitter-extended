@@ -245,20 +245,29 @@ function cleanupOrphanedDirectories(dir, fileFormat) {
  * (reading 'name')" and crashes the flow reload. Guaranteeing a truthy
  * label/name here means the first operand of that chain always short-circuits
  * before the buggy access is ever reached.
+ *
+ * Only tabs, subflows and config nodes (no x/y, the rule used by
+ * @node-red/flow-parser) are disambiguated, so regular nodes are left untouched. The placeholders are written
+ * on the live Node-RED config objects, so they must be removed with the
+ * returned function once flows-file-manager is done; otherwise they show up
+ * in the editor and are persisted to flows.json and the split files.
  * @param {Array} flowNodes - Array of all flow nodes from Node-RED
- * @returns {Array} flowNodes - Same array, mutated in place with guaranteed identifiers
+ * @returns {Function} restore - Puts back the original label/name values
  */
 function ensureFlowIdentifiers(flowNodes) {
+    const changed = []
     flowNodes.forEach(node => {
-        if (node.type === 'tab') {
-            if (!node.label) {
-                node.label = node.name || node.type || node.id
-            }
-        } else if (!node.name) {
-            node.name = node.type || node.id
+        if (node.type !== 'tab' && node.type !== 'subflow' && 'x' in node && 'y' in node) return
+        const attribute = node.type === 'tab' ? 'label' : 'name'
+        if (!node[attribute]) {
+            changed.push([node, attribute, node[attribute]])
+            node[attribute] = (attribute === 'label' && node.name) || node.type || node.id
         }
     })
-    return flowNodes
+    return () => changed.forEach(([node, attribute, value]) => {
+        if (value === undefined) delete node[attribute]
+        else node[attribute] = value
+    })
 }
 
 function fastNormalizeString(value) {
@@ -708,20 +717,21 @@ async function onFlowReload(flowEventData) {
         lastRenameFingerprint = renameFingerprint
     }
 
-    // Guarantee every node has a label/name to avoid a crash inside
-    // flows-file-manager's disambiguate() (see ensureFlowIdentifiers doc above)
-    ensureFlowIdentifiers(flowEventData.config.flows)
-
     let updatedCfg
     if (cfg.fileFormat === 'json' && cfg.fastJsonSplit !== false) {
         updatedCfg = fastJsonTree(flowEventData.config.flows, cfg, projectPath)
     } else {
         let flowSet
+        // Guarantee a label/name to avoid a crash inside flows-file-manager's
+        // disambiguate() (see ensureFlowIdentifiers doc above)
+        const restoreFlowIdentifiers = ensureFlowIdentifiers(flowEventData.config.flows)
         try {
             flowSet = manager.constructFlowSetFromMonolithObject(flowEventData.config.flows)
         } catch (error) {
             RED.log.error(`[node-red-contrib-flow-splitter-extended] Failed to build FlowSet from monolith object (flows-file-manager error): ${error.message}`)
             return
+        } finally {
+            restoreFlowIdentifiers()
         }
         updatedCfg = constructTreeFilesIncrementally(flowSet, cfg, projectPath)
     }

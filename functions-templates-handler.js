@@ -61,6 +61,18 @@ function templateFileExtension(format) {
 }
 
 /**
+ * Write through a temporary file renamed over the target, so a crash mid-write
+ * never leaves a truncated flow, code or config file behind.
+ * @param {string} filePath
+ * @param {string|Buffer} content
+ */
+function writeFileAtomic(filePath, content) {
+    const tmpPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.tmp`)
+    fs.writeFileSync(tmpPath, content, 'utf8')
+    fs.renameSync(tmpPath, filePath)
+}
+
+/**
  * Functions and Templates nodes Handler
  * Extracts function and ui-template node code into separate files
  * and restores them back when rebuilding flows
@@ -104,7 +116,7 @@ function extractFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
                 // Rewrite unreadable or otherwise invalid files below.
             }
         }
-        fs.writeFileSync(filePath, content, 'utf8')
+        writeFileAtomic(filePath, content)
     }
 
     flowNodes.forEach((node) => {
@@ -237,7 +249,7 @@ function extractFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
             }
         }
         
-        RED.log.info(`[node-red-contrib-flow-splitter] Extracted ${count} functions/templates for "${flowName}"`)
+        RED.log.info(`[node-red-contrib-flow-splitter-extended] Extracted ${count} functions/templates for "${flowName}"`)
     }
 }
 
@@ -264,7 +276,7 @@ function restoreFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
     try {
         manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'))
     } catch (error) {
-        RED.log.warn(`[node-red-contrib-flow-splitter] Could not read manifest for "${flowName}": ${error.message}`)
+        RED.log.warn(`[node-red-contrib-flow-splitter-extended] Could not read manifest for "${flowName}": ${error.message}`)
         return flowNodes
     }
 
@@ -276,7 +288,7 @@ function restoreFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
         const node = flowNodes.find(n => n.id === nodeId)
 
         if (!node) {
-            RED.log.warn(`[node-red-contrib-flow-splitter] Node ${nodeId} not found in flow "${flowName}"`)
+            RED.log.warn(`[node-red-contrib-flow-splitter-extended] Node ${nodeId} not found in flow "${flowName}"`)
             return
         }
 
@@ -344,13 +356,14 @@ function restoreFunctionsAndTemplates(flowNodes, flowName, flowDir, RED) {
     })
 
     if (updatedCount > 0) {
-        RED.log.info(`[node-red-contrib-flow-splitter] Restored ${updatedCount} functions/templates for "${flowName}"`)
+        RED.log.info(`[node-red-contrib-flow-splitter-extended] Restored ${updatedCount} functions/templates for "${flowName}"`)
     }
 
     return flowNodes
 }
 
 module.exports = {
+    writeFileAtomic,
     extractFunctionsAndTemplates,
     restoreFunctionsAndTemplates
 }

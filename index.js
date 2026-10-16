@@ -5,6 +5,7 @@ const eol = require('eol')
 const yaml = require('js-yaml')
 const crypto = require('crypto')
 const functionsTemplatesHandler = require('./functions-templates-handler')
+const { writeFileAtomic } = functionsTemplatesHandler
 
 /**
  * Here we define some types to allow the IDE to provide us autocompletion.
@@ -50,7 +51,7 @@ function writeSplitterConfig(cfg, projectPath) {
     try {
         const splitterCfgToWrite = JSON.parse(JSON.stringify(cfg))
         delete splitterCfgToWrite.monolithFilename
-        fs.writeFileSync(path.join(projectPath, splitCfgFilename), eol.auto(JSON.stringify(splitterCfgToWrite, null, 2)))
+        writeFileAtomic(path.join(projectPath, splitCfgFilename), eol.auto(JSON.stringify(splitterCfgToWrite, null, 2)))
     } catch (error) {
         RED.log.warn(`[node-red-contrib-flow-splitter-extended] Could not write splitter config '${splitCfgFilename}': ${error}`)
     }
@@ -108,15 +109,50 @@ function loadSplitterConfig(projectPath) {
 
 /**
  * Get private RED instance to access internal APIs
+ * Plugins only get the public API, which cannot reload flows from disk, so this
+ * relies on Node-RED internals and throws a clear error if they change.
  * @returns {REDType} Private RED instance
  */
 function getPrivateRED() {
-    for (const child of require.main.children) {
-        if (child.filename.endsWith('red.js')) {
-            return require(child.filename)
+    let privateRED
+    const child = require.main && require.main.children.find(child => child.filename.endsWith('red.js'))
+    try {
+        privateRED = child ? require(child.filename) : require('node-red')
+    } catch (error) {
+        throw new Error(`Cannot access the Node-RED runtime to reload flows: ${error.message}`)
+    }
+    if (typeof privateRED?.nodes?.loadFlows !== 'function') {
+        throw new Error('Cannot reload flows: RED.nodes.loadFlows() is not available in this Node-RED version')
+    }
+    return privateRED
+}
+
+/**
+ * flows-file-manager skips split files it cannot parse, so one corrupted file
+ * would silently drop its tab from the rebuilt flows.json. Throw instead, so
+ * the boot rebuild falls back to the artifact and manual reload reports it.
+ * @param {object} cfg - Splitter configuration
+ * @param {string} projectPath - Path to the project
+ */
+function assertSplitFilesParse(cfg, projectPath) {
+    const srcDir = path.join(projectPath, cfg.destinationFolder || 'src')
+    const extension = `.${cfg.fileFormat}`
+    for (const folder of ['tabs', 'subflows', 'config-nodes']) {
+        const dir = path.join(srcDir, folder)
+        if (!fs.existsSync(dir)) continue
+        for (const file of fs.readdirSync(dir).filter(f => f.endsWith(extension))) {
+            const fileContent = fs.readFileSync(path.join(dir, file), 'utf8')
+            try {
+                if (cfg.fileFormat.toLowerCase() !== 'json') {
+                    yaml.load(fileContent)
+                } else {
+                    JSON.parse(fileContent)
+                }
+            } catch (error) {
+                throw new Error(`Cannot parse split file '${folder}/${file}': ${error.message}`)
+            }
         }
     }
-    return require('node-red')
 }
 
 /**
@@ -200,7 +236,7 @@ function constructTreeFilesIncrementally(flowSet, cfg, projectPath) {
                 const from = path.join(fromDir, file)
                 const to = path.join(toDir, file)
                 if (!fs.existsSync(to) || fs.readFileSync(from).compare(fs.readFileSync(to)) !== 0) {
-                    fs.copyFileSync(from, to)
+                    writeFileAtomic(to, fs.readFileSync(from))
                 }
             }
             removeStaleFiles(toDir, new Set(files))
@@ -339,7 +375,7 @@ function fastJsonTree(flowNodes, cfg, projectPath) {
         const filePath = path.join(srcDir, group.folder, `${group.fileName}.json`)
         // normalizedLabel comes from split files written by flows-file-manager
         const content = eol.auto(JSON.stringify(group.contents.map(({ normalizedLabel, ...node }) => node), null, 2))
-        if (!fs.existsSync(filePath) || fs.readFileSync(filePath, 'utf8') !== content) fs.writeFileSync(filePath, content, 'utf8')
+        if (!fs.existsSync(filePath) || fs.readFileSync(filePath, 'utf8') !== content) writeFileAtomic(filePath, content)
     }
     for (const folder of ['tabs', 'subflows', 'config-nodes']) {
         removeStaleFiles(path.join(srcDir, folder), new Set(groups.filter(group => group.folder === folder).map(group => `${group.fileName}.json`)))
@@ -459,9 +495,9 @@ function restoreIntoFlowDirectory(dir, fileFormat, flowType) {
                     noRefs: true,
                     sortKeys: false
                 })
-                fs.writeFileSync(filePath, eol.auto(yamlContent), 'utf8')
+                writeFileAtomic(filePath, eol.auto(yamlContent))
             } else {
-                fs.writeFileSync(filePath, eol.auto(JSON.stringify(flowNodes, null, 2)), 'utf8')
+                writeFileAtomic(filePath, eol.auto(JSON.stringify(flowNodes, null, 2)))
             }
 
         } catch (error) {
@@ -488,7 +524,7 @@ function writeMonolithArtifact(cfg, projectPath, flowNodes) {
         fs.mkdirSync(artifactDir, { recursive: true })
 
         if (Array.isArray(flowNodes)) {
-            fs.writeFileSync(artifactPath, eol.auto(JSON.stringify(flowNodes, null, 2)), 'utf8')
+            writeFileAtomic(artifactPath, eol.auto(JSON.stringify(flowNodes, null, 2)))
         } else {
             const monolithPath = path.join(projectPath, cfg.monolithFilename || RED.settings.flowFile || 'flows.json')
 
@@ -497,7 +533,7 @@ function writeMonolithArtifact(cfg, projectPath, flowNodes) {
                 return
             }
 
-            fs.copyFileSync(monolithPath, artifactPath)
+            writeFileAtomic(artifactPath, fs.readFileSync(monolithPath))
         }
 
         RED.log.info(`[node-red-contrib-flow-splitter-extended] Wrote monolith artifact at '${artifactPath}'`)
@@ -524,7 +560,7 @@ function restoreFromArtifactFallback(cfg, projectPath) {
 
     try {
         const monolithPath = path.join(projectPath, cfg.monolithFilename || RED.settings.flowFile || 'flows.json')
-        fs.copyFileSync(artifactPath, monolithPath)
+        writeFileAtomic(monolithPath, fs.readFileSync(artifactPath))
         RED.log.warn(`[node-red-contrib-flow-splitter-extended] Rebuild from source files failed - restored flows from artifact backup '${artifactPath}' instead. Check 'src/' for corrupted split files.`)
         return true
     } catch (error) {
@@ -547,6 +583,7 @@ async function manualReload(req, res) {
         // The endpoint exists to apply external edits, so restore regardless
         // of restoreFunctionsTemplates (which only gates the boot rebuild)
         restoreFunctionsTemplatesIntoSplitFiles({ ...cfg, restoreFunctionsTemplates: true }, projectPath)
+        assertSplitFilesParse(cfg, projectPath)
 
         const flowSet = manager.constructFlowSetFromTreeFiles(cfg, projectPath)
 
@@ -604,6 +641,7 @@ async function onFlowReload(flowEventData) {
 
         try {
             restoreFunctionsTemplatesIntoSplitFiles(cfg, projectPath)
+            assertSplitFilesParse(cfg, projectPath)
 
             const flowSet = manager.constructFlowSetFromTreeFiles(cfg, projectPath)
 
@@ -634,15 +672,16 @@ async function onFlowReload(flowEventData) {
             }
         }
 
-        const PRIVATE_RED = getPrivateRED()
-
         RED.log.info("[node-red-contrib-flow-splitter-extended] Stopping and loading nodes")
 
-        PRIVATE_RED.nodes.loadFlows(true).then(function () {
+        try {
+            await getPrivateRED().nodes.loadFlows(true)
             RED.log.info(rebuildFailed
                 ? "[node-red-contrib-flow-splitter-extended] Flows loaded from artifact fallback"
                 : "[node-red-contrib-flow-splitter-extended] Flows are rebuilt and available")
-        })
+        } catch (error) {
+            RED.log.error(`[node-red-contrib-flow-splitter-extended] Could not load the rebuilt flows: ${error.message}. Restart Node-RED to load them.`)
+        }
         return
     }
 

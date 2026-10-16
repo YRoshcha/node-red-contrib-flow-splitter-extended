@@ -214,14 +214,14 @@ function constructTreeFilesIncrementally(flowSet, cfg, projectPath) {
 /**
  * Remove subdirectories that don't have a corresponding flow file
  * @param {string} dir - Directory to clean (tabs or subflows)
- * @param {string} fileFormat - File format (yaml or json)
+ * @param {string} fileFormat - File format (yaml, yml or json), also the file extension
  */
 function cleanupOrphanedDirectories(dir, fileFormat) {
     if (!fs.existsSync(dir)) {
         return
     }
 
-    const extension = fileFormat === 'yaml' ? '.yaml' : '.json'
+    const extension = `.${fileFormat}`
     
     // Get all flow files
     const flowFiles = fs.readdirSync(dir)
@@ -337,7 +337,8 @@ function fastJsonTree(flowNodes, cfg, projectPath) {
     for (const folder of ['tabs', 'subflows', 'config-nodes']) fs.mkdirSync(path.join(srcDir, folder), { recursive: true })
     for (const group of groups) {
         const filePath = path.join(srcDir, group.folder, `${group.fileName}.json`)
-        const content = eol.auto(JSON.stringify(group.contents, null, 2))
+        // normalizedLabel comes from split files written by flows-file-manager
+        const content = eol.auto(JSON.stringify(group.contents.map(({ normalizedLabel, ...node }) => node), null, 2))
         if (!fs.existsSync(filePath) || fs.readFileSync(filePath, 'utf8') !== content) fs.writeFileSync(filePath, content, 'utf8')
     }
     for (const folder of ['tabs', 'subflows', 'config-nodes']) {
@@ -366,7 +367,7 @@ function extractFunctionsTemplatesFromRawFlow(cfg, projectPath, flowNodes) {
 /**
  * Process a directory of flow files to extract functions/templates
  * @param {string} dir - Directory to process
- * @param {string} fileFormat - File format (yaml or json)
+ * @param {string} fileFormat - File format (yaml, yml or json), also the file extension
  * @param {string} flowType - Type of flow (tab or subflow)
  */
 function processFlowDirectory(dir, fileFormat, flowType) {
@@ -374,7 +375,7 @@ function processFlowDirectory(dir, fileFormat, flowType) {
         return
     }
 
-    const extension = fileFormat === 'yaml' ? '.yaml' : '.json'
+    const extension = `.${fileFormat}`
     const files = fs.readdirSync(dir).filter(f => f.endsWith(extension))
 
     files.forEach(file => {
@@ -385,7 +386,7 @@ function processFlowDirectory(dir, fileFormat, flowType) {
             let flowData
             const fileContent = fs.readFileSync(filePath, 'utf8')
 
-            if (fileFormat === 'yaml') {
+            if (fileFormat.toLowerCase() !== 'json') {
                 flowData = yaml.load(fileContent)
             } else {
                 flowData = JSON.parse(fileContent)
@@ -423,7 +424,7 @@ function restoreFunctionsTemplatesIntoSplitFiles(cfg, projectPath) {
 /**
  * Process a directory of flow files to restore functions/templates
  * @param {string} dir - Directory to process
- * @param {string} fileFormat - File format (yaml or json)
+ * @param {string} fileFormat - File format (yaml, yml or json), also the file extension
  * @param {string} flowType - Type of flow (tab or subflow)
  */
 function restoreIntoFlowDirectory(dir, fileFormat, flowType) {
@@ -431,7 +432,7 @@ function restoreIntoFlowDirectory(dir, fileFormat, flowType) {
         return
     }
 
-    const extension = fileFormat === 'yaml' ? '.yaml' : '.json'
+    const extension = `.${fileFormat}`
     const files = fs.readdirSync(dir).filter(f => f.endsWith(extension))
 
     files.forEach(file => {
@@ -442,7 +443,7 @@ function restoreIntoFlowDirectory(dir, fileFormat, flowType) {
             let flowData
             const fileContent = fs.readFileSync(filePath, 'utf8')
 
-            if (fileFormat === 'yaml') {
+            if (fileFormat.toLowerCase() !== 'json') {
                 flowData = yaml.load(fileContent)
             } else {
                 flowData = JSON.parse(fileContent)
@@ -451,7 +452,7 @@ function restoreIntoFlowDirectory(dir, fileFormat, flowType) {
             let flowNodes = Array.isArray(flowData) ? flowData : [flowData]
             flowNodes = functionsTemplatesHandler.restoreFunctionsAndTemplates(flowNodes, flowName, dir, RED)
 
-            if (fileFormat === 'yaml') {
+            if (fileFormat.toLowerCase() !== 'json') {
                 const yamlContent = yaml.dump(flowNodes, {
                     indent: 2,
                     lineWidth: -1,

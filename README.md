@@ -292,6 +292,15 @@ The "rebuild from `src/`" path only runs when Node-RED boots with no flow file p
 - Compatible with Dashboard 2.0 ui-template nodes
 - Supports both CommonJS and modern JavaScript
 
+## Development
+
+```bash
+npm install
+npm test
+```
+
+The tests run the plugin against a fake Node-RED runtime in a temporary user directory: split, extraction, rebuild, manual reload and artifact fallback.
+
 ## Credits
 
 Maintained by [YRoshcha](https://github.com/YRoshcha).

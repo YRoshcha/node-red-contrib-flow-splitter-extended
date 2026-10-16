@@ -112,7 +112,7 @@ project/
 ├── .config.flow-splitter.json
 └── src/
     ├── tabs/
-    │   ├── Dashboard.yaml
+    │   ├── Dashboard.json
     │   └── Dashboard/
     │       ├── .manifest.json
     │       ├── process_data.js
@@ -122,13 +122,13 @@ project/
     │       ├── header_template.vue
     │       └── status_widget.vue
     ├── subflows/
-    │   ├── DataProcessor.yaml
+    │   ├── DataProcessor.json
     │   └── DataProcessor/
     │       ├── .manifest.json
     │       ├── transform.js
     │       └── validate.js
     └── config-nodes/
-        └── mqtt-broker.yaml
+        └── mqtt-broker.json
 ```
 
 ## Configuration
@@ -139,7 +139,7 @@ Default configuration file =
 
 ```json
 {
-  "fileFormat": "yaml",
+  "fileFormat": "json",
   "destinationFolder": "src",
   "tabsOrder": [],
   "extractFunctionsTemplates": true,
@@ -151,7 +151,7 @@ Default configuration file =
 
 You can freely edit the config file, the changes are taken into account at the next restart of the flows.
 
-- `fileFormat`: parsing language for your split source files (either `yaml` or `json`)
+- `fileFormat`: **default `json`.** Parsing language for your split source files (either `yaml` or `json`). JSON split files can be pasted directly into the Node-RED *Import* dialog. Existing projects keep the format stored in this file; to switch, change it here, restart and deploy, then delete the old split files.
 - `destinationFolder`: path where to create the `tabs`, `subflows` and `config-nodes` sub-directories
 - `tabsOrder`: position of each tab (ordered array of the Ids of each tab node)
 - `extractFunctionsTemplates`: additional extraction of function and ui-template nodes

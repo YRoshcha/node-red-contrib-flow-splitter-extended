@@ -247,27 +247,40 @@ function cleanupOrphanedDirectories(dir, fileFormat) {
  * before the buggy access is ever reached.
  *
  * Only tabs, subflows and config nodes (no x/y, the rule used by
- * @node-red/flow-parser) are disambiguated, so regular nodes are left untouched. The placeholders are written
- * on the live Node-RED config objects, so they must be removed with the
- * returned function once flows-file-manager is done; otherwise they show up
- * in the editor and are persisted to flows.json and the split files.
+ * @node-red/flow-parser) are disambiguated, so regular nodes are left
+ * untouched. The live Node-RED config is never mutated: placeholders go on
+ * copies, otherwise they show up in the editor and end up in flows.json.
  * @param {Array} flowNodes - Array of all flow nodes from Node-RED
- * @returns {Function} restore - Puts back the original label/name values
+ * @returns {Array} Copy of flowNodes with guaranteed identifiers
  */
 function ensureFlowIdentifiers(flowNodes) {
-    const changed = []
-    flowNodes.forEach(node => {
-        if (node.type !== 'tab' && node.type !== 'subflow' && 'x' in node && 'y' in node) return
+    return flowNodes.map(node => {
+        if (node.type !== 'tab' && node.type !== 'subflow' && 'x' in node && 'y' in node) return node
         const attribute = node.type === 'tab' ? 'label' : 'name'
-        if (!node[attribute]) {
-            changed.push([node, attribute, node[attribute]])
-            node[attribute] = (attribute === 'label' && node.name) || node.type || node.id
+        return node[attribute] ? node : { ...node, [attribute]: node.type }
+    })
+}
+
+/**
+ * Keep flows-file-manager artifacts out of the split files: undo the
+ * ensureFlowIdentifiers() placeholders on the parsed copies (flow-parser
+ * deep-clones its input) and hide the normalizedLabel added by
+ * disambiguate(). The tree writer still reads normalizedLabel for file
+ * names, but flow-parser's export() only copies enumerable properties.
+ * @param {object} flowSet - FlowSet built by constructFlowSetFromMonolithObject()
+ * @param {Array} flowNodes - Original flow nodes from Node-RED
+ */
+function cleanFlowSet(flowSet, flowNodes) {
+    const originals = new Map(flowNodes.map(node => [node.id, node]))
+    for (const element of [...flowSet.flows.values(), ...flowSet.subflows.values(), ...flowSet.configNodes.values()]) {
+        const original = originals.get(element.id)
+        const attribute = element.type === 'tab' ? 'label' : 'name'
+        if (original && !original[attribute]) {
+            if (attribute in original) element.config[attribute] = original[attribute]
+            else delete element.config[attribute]
         }
-    })
-    return () => changed.forEach(([node, attribute, value]) => {
-        if (value === undefined) delete node[attribute]
-        else node[attribute] = value
-    })
+        Object.defineProperty(element.config, 'normalizedLabel', { enumerable: false })
+    }
 }
 
 function fastNormalizeString(value) {
@@ -724,15 +737,13 @@ async function onFlowReload(flowEventData) {
         let flowSet
         // Guarantee a label/name to avoid a crash inside flows-file-manager's
         // disambiguate() (see ensureFlowIdentifiers doc above)
-        const restoreFlowIdentifiers = ensureFlowIdentifiers(flowEventData.config.flows)
         try {
-            flowSet = manager.constructFlowSetFromMonolithObject(flowEventData.config.flows)
+            flowSet = manager.constructFlowSetFromMonolithObject(ensureFlowIdentifiers(flowEventData.config.flows))
         } catch (error) {
             RED.log.error(`[node-red-contrib-flow-splitter-extended] Failed to build FlowSet from monolith object (flows-file-manager error): ${error.message}`)
             return
-        } finally {
-            restoreFlowIdentifiers()
         }
+        cleanFlowSet(flowSet, flowEventData.config.flows)
         updatedCfg = constructTreeFilesIncrementally(flowSet, cfg, projectPath)
     }
     writeSplitterConfig(updatedCfg, projectPath)
